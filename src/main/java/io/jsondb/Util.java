@@ -26,8 +26,10 @@ import java.io.BufferedWriter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -198,12 +200,31 @@ public class Util {
    * @return true if success.
    */
   public static boolean stampVersion(JsonDBConfig dbConfig, File f, String version) {
+    FileOutputStream fos;
+    try {
+      fos = new FileOutputStream(f);
+      return stampVersion(dbConfig, fos, version, f.getAbsolutePath());
+    } catch (FileNotFoundException e) {
+      logger.error("FileNotFoundException new .json file {}", f, e);
+      return false;
+    }
 
-    FileOutputStream fos = null;
+  }
+
+  /**
+   * Utility to stamp the version into a newly created .json File
+   * This method is expected to be invoked on a newly created .json file before it is usable.
+   * So no locking code required.
+   * 
+   * @param dbConfig  all the settings used by Json DB
+   * @param f  the target .json file on which to stamp the version
+   * @param version  the actual version string to stamp
+   * @return true if success.
+   */
+  public static boolean stampVersion(JsonDBConfig dbConfig, OutputStream fos, String version, String f) {
     OutputStreamWriter osr = null;
     BufferedWriter writer = null;
     try {
-      fos = new FileOutputStream(f);
       osr = new OutputStreamWriter(fos, dbConfig.getCharset());
       writer = new BufferedWriter(osr);
 
@@ -236,6 +257,7 @@ public class Util {
     return true;
   }
 
+  
   /**
    * Utility to delete directory recursively
    * @param f  File object representing the directory to recursively delete

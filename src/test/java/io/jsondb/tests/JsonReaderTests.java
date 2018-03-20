@@ -34,6 +34,8 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
+import org.apache.hadoop.fs.Path;
+
 import com.google.common.io.Files;
 
 import io.jsondb.DefaultSchemaVersionComparator;
@@ -74,7 +76,7 @@ public class JsonReaderTests {
     JsonDBConfig dbConfig = new JsonDBConfig(dbFilesLocation, "io.jsondb.tests.model", null, false,
         new DefaultSchemaVersionComparator());
     
-    JsonReader jr = new JsonReader(dbConfig, instancesJson);
+    JsonReader jr = new JsonReader(dbConfig, new Path(instancesJson.getAbsolutePath()));
     
     assertNotNull(jr);
     assertEquals("{\"schemaVersion\":\"1.0\"}", jr.readLine());
@@ -97,14 +99,14 @@ public class JsonReaderTests {
       //Ignore
     }
     
-    expectedException.expect(JsonFileLockException.class);
-    expectedException.expectMessage("JsonReader failed to obtain a file lock for file " + fileLockLocation);
+    expectedException.expect(IllegalStateException.class);
+    expectedException.expectMessage("Destination exists and is not a directory");
     
     JsonDBConfig dbConfig = new JsonDBConfig(dbFilesLocation, "io.jsondb.tests.model", null, false,
         new DefaultSchemaVersionComparator());
     
     @SuppressWarnings("unused")
-    JsonReader jr = new JsonReader(dbConfig, instancesJson);
+    JsonReader jr = new JsonReader(dbConfig, new Path(instancesJson.getAbsolutePath()));
     raf.close();
   }
 }

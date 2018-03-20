@@ -1,0 +1,12 @@
+{"schemaVersion":"0.5"}
+{"id":"001","location":"eclb-54-01","address":{"number":23,"street":"Junction Ave","city":"San Jose"}}
+{"id":"002","location":"eclb-54-02","address":{"number":24,"street":"Fruitvale Ave","city":"Santa Clara"}}
+{"id":"003","location":"eclb-54-03","address":{"number":33,"street":"Plumeria Rd","city":"San Francisco"}}
+{"id":"004","location":"eclb-54-04","address":{"number":35,"street":"Zanker St","city":"San Jose"}}
+{"id":"005","location":"eclb-54-05","address":{"number":43,"street":"First St","city":"Cupertino"}}
+{"id":"006","location":"eclb-54-06","address":{"number":44,"street":"El Camino Real","city":"Sunnyvale"}}
+{"id":"007","location":"eclb-54-07","address":{"number":54,"street":"Calle de Barcelona","city":"Santa Clara"}}
+{"id":"008","location":"eclb-54-08","address":{"number":55,"street":"Penny Lane","city":"Sunnyvale"}}
+{"id":"009","location":"eclb-54-09","address":{"number":65,"street":"Bogus Alley","city":"Milpitas"}}
+{"id":"010","location":"eclb-54-10","address":{"number":67,"street":"Terrace Blvd","city":"Fremont"}}
+{"id":"011","location":"eclb-54-04","address":{"number":77,"street":"Homestead Rd","city":"Cupertino"}}

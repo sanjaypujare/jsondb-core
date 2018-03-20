@@ -43,6 +43,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.commons.beanutils.BeanUtils;
 import org.apache.commons.jxpath.JXPathContext;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.Path;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,11 +74,11 @@ public class JsonDBTemplate implements JsonDBOperations {
 
   private JsonDBConfig dbConfig = null;
   private final boolean encrypted;
-  private File lockFilesLocation;
+  private Path lockFilesLocation;
   private EventListenerList eventListenerList;
 
   private Map<String, CollectionMetaData> cmdMap;
-  private AtomicReference<Map<String, File>> fileObjectsRef = new AtomicReference<Map<String, File>>(new ConcurrentHashMap<String, File>());
+  private AtomicReference<Map<String, Path>> fileObjectsRef = new AtomicReference<Map<String, Path>>(new ConcurrentHashMap<String, Path>());
   private AtomicReference<Map<String, Map<Object, ?>>> collectionsRef = new AtomicReference<Map<String, Map<Object, ?>>>(new ConcurrentHashMap<String, Map<Object, ?>>());
   private AtomicReference<Map<String, JXPathContext>> contextsRef = new AtomicReference<Map<String, JXPathContext>>(new ConcurrentHashMap<String, JXPathContext>());
 
@@ -90,8 +94,13 @@ public class JsonDBTemplate implements JsonDBOperations {
     this(dbFilesLocationString, baseScanPackage, cipher, false, null);
   }
 
-  public JsonDBTemplate(String dbFilesLocationString, String baseScanPackage, ICipher cipher, boolean compatibilityMode, Comparator<String> schemaComparator) {
-    dbConfig = new JsonDBConfig(dbFilesLocationString, baseScanPackage, cipher, compatibilityMode, schemaComparator);
+  public JsonDBTemplate(String dbFilesLocationString, String baseScanPackage, ICipher cipher, boolean compatibilityMode, Comparator<String> schemaComparator)
+  {
+    this(dbFilesLocationString, baseScanPackage, cipher, compatibilityMode, schemaComparator, new Configuration());
+  }
+
+  public JsonDBTemplate(String dbFilesLocationString, String baseScanPackage, ICipher cipher, boolean compatibilityMode, Comparator<String> schemaComparator, Configuration conf) {
+    dbConfig = new JsonDBConfig(dbFilesLocationString, baseScanPackage, cipher, compatibilityMode, schemaComparator, conf);
     if (null == cipher) {
       logger.info("Encryption is not enabled for JSON DB");
       this.encrypted = false;
@@ -104,24 +113,22 @@ public class JsonDBTemplate implements JsonDBOperations {
   }
 
   private void initialize(){
-    this.lockFilesLocation = new File(dbConfig.getDbFilesLocation(), "lock");
-    if(!lockFilesLocation.exists()) {
-      lockFilesLocation.mkdirs();
-    }
-    if (!dbConfig.getDbFilesLocation().exists()) {
-      try {
-        Files.createDirectory(dbConfig.getDbFilesPath());
-      } catch (IOException e) {
-        logger.error("DbFiles directory does not exist. Failed to create a new empty DBFiles directory {}", e);
-        throw new InvalidJsonDbApiUsageException("DbFiles directory does not exist. Failed to create a new empty DBFiles directory " + dbConfig.getDbFilesLocationString());
+    this.lockFilesLocation = new Path(dbConfig.getDbFilesLocation(), "lock");
+    try {
+      if(!dbConfig.getDbFileSystem().exists(lockFilesLocation)) {
+        dbConfig.getDbFileSystem().mkdirs(lockFilesLocation);
       }
-    } else if (dbConfig.getDbFilesLocation().isFile()) {
-      throw new InvalidJsonDbApiUsageException("Specified DbFiles directory is actually a file cannot use it as a directory");
+      if (!dbConfig.getDbFileSystem().exists(dbConfig.getDbFilesLocation())) {
+        dbConfig.getDbFileSystem().mkdirs(dbConfig.getDbFilesPath());
+      } else if (dbConfig.getDbFileSystem().isFile(dbConfig.getDbFilesLocation())) {
+        throw new InvalidJsonDbApiUsageException("Specified DbFiles directory is actually a file cannot use it as a directory");
+      }
+      cmdMap = CollectionMetaData.builder(dbConfig);
+      loadDB();
+    } catch (IOException e) {
+      logger.error("IOException {}", e);
+      throw new InvalidJsonDbApiUsageException("IOException " + dbConfig.getDbFilesLocationString());
     }
-
-    cmdMap = CollectionMetaData.builder(dbConfig);
-
-    loadDB();
 
     // Auto-cleanup at shutdown
     Runtime.getRuntime().addShutdownHook(new Thread() {
@@ -137,13 +144,17 @@ public class JsonDBTemplate implements JsonDBOperations {
    */
   @Override
   public void reLoadDB() {
-    loadDB();
+    try {
+      loadDB();
+    } catch (IOException e) {
+      logger.error("reLoadDB failed", e);
+    }
   }
 
-  private synchronized void loadDB() {
+  private synchronized void loadDB() throws IOException {
     for(String collectionName : cmdMap.keySet()) {
-      File collectionFile = new File(dbConfig.getDbFilesLocation(), collectionName + ".json");
-      if(collectionFile.exists()) {
+      Path collectionFile = new Path(dbConfig.getDbFilesLocation(), collectionName + ".json");
+      if(dbConfig.getDbFileSystem().exists(collectionFile)) {
         reloadCollection(collectionName);
       } else if (collectionsRef.get().containsKey(collectionName)){
         //this probably is a reload attempt after a collection .json was deleted.
@@ -161,15 +172,19 @@ public class JsonDBTemplate implements JsonDBOperations {
     CollectionMetaData cmd = cmdMap.get(collectionName);
     cmd.getCollectionLock().writeLock().lock();
     try {
-      File collectionFile = fileObjectsRef.get().get(collectionName);
+      Path collectionFile = fileObjectsRef.get().get(collectionName);
       if(null == collectionFile) {
         // Lets create a file now
-        collectionFile = new File(dbConfig.getDbFilesLocation(), collectionName + ".json");
-        if(!collectionFile.exists()) {
-          throw new InvalidJsonDbApiUsageException("Collection by name '" + collectionName + "' cannot be found at " + collectionFile.getAbsolutePath());
+        collectionFile = new Path(dbConfig.getDbFilesLocation(), collectionName + ".json");
+        try {
+          if(!dbConfig.getDbFileSystem().exists(collectionFile)) {
+            throw new InvalidJsonDbApiUsageException("Collection by name '" + collectionName + "' cannot be found at " + collectionFile);
+          }
+        } catch (IOException e) {
+          throw new JsonDBException("Exception in accessing Collection by name '" + collectionName + "' at " + collectionFile, e);
         }
-        Map<String, File> fileObjectMap = fileObjectsRef.get();
-        Map<String, File> newFileObjectmap = new ConcurrentHashMap<String, File>(fileObjectMap);
+        Map<String, Path> fileObjectMap = fileObjectsRef.get();
+        Map<String, Path> newFileObjectmap = new ConcurrentHashMap<String, Path>(fileObjectMap);
         newFileObjectmap.put(collectionName, collectionFile);
         fileObjectsRef.set(newFileObjectmap);
       }
@@ -190,7 +205,7 @@ public class JsonDBTemplate implements JsonDBOperations {
     }
   }
 
-  private <T> Map<Object, T> loadCollection(File collectionFile, String collectionName, CollectionMetaData cmd) {
+  private <T> Map<Object, T> loadCollection(Path collectionFile, String collectionName, CollectionMetaData cmd) {
     @SuppressWarnings("unchecked")
     Class<T> entity = cmd.getClazz();
     Method getterMethodForId = cmd.getIdAnnotatedFieldGetterMethod();
@@ -302,24 +317,28 @@ public class JsonDBTemplate implements JsonDBOperations {
 
     try {
       String collectionFileName = collectionName + ".json";
-      File fileObject = new File(dbConfig.getDbFilesLocation(), collectionFileName);
+      Path fileObject = new Path(dbConfig.getDbFilesLocation(), collectionFileName);
+      FSDataOutputStream fsOut;
       try {
-        fileObject.createNewFile();
+        fsOut = dbConfig.getDbFileSystem().create(fileObject);
       } catch (IOException e) {
         logger.error("IO Exception creating the collection file {}", collectionFileName, e);
         throw new InvalidJsonDbApiUsageException("Unable to create a collection file for collection: " + collectionName);
       }
 
-      if (Util.stampVersion(dbConfig, fileObject, cmd.getSchemaVersion())) {
+      if (Util.stampVersion(dbConfig, fsOut, cmd.getSchemaVersion(), fileObject.toString())) {
         collection = new LinkedHashMap<Object, T>();
         collectionsRef.get().put(collectionName, collection);
         contextsRef.get().put(collectionName, JXPathContext.newContext(collection.values())) ;
         fileObjectsRef.get().put(collectionName, fileObject);
         cmd.setActualSchemaVersion(cmd.getSchemaVersion());
       } else {
-        fileObject.delete();
+        dbConfig.getDbFileSystem().delete(fileObject, false);
         throw new JsonDBException("Failed to stamp version for collection: " + collectionName);
       }
+    } catch (IOException e) {
+      logger.error("IO Exception deleting the collection file {}", collectionName, e);
+      throw new InvalidJsonDbApiUsageException("Unable to create a collection file for collection: " + collectionName);
     } finally {
       cmd.getCollectionLock().writeLock().unlock();
     }
@@ -344,9 +363,9 @@ public class JsonDBTemplate implements JsonDBOperations {
     }
     cmd.getCollectionLock().writeLock().lock();
     try {
-      File toDelete = fileObjectsRef.get().get(collectionName);
+      Path toDelete = fileObjectsRef.get().get(collectionName);
       try {
-        Files.deleteIfExists(toDelete.toPath());
+        dbConfig.getDbFileSystem().delete(toDelete, false);
       } catch (IOException e) {
         logger.error("IO Exception deleting the collection file {}", toDelete.getName(), e);
         throw new InvalidJsonDbApiUsageException("Unable to create a collection file for collection: " + collectionName);

@@ -31,9 +31,15 @@ import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
+import java.util.concurrent.locks.Lock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.Path;
+
+import com.datatorrent.gateway.ha.lock.LockFactory;
 
 import io.jsondb.JsonDBConfig;
 
@@ -48,48 +54,34 @@ public class JsonReader {
 
   private Logger logger = LoggerFactory.getLogger(JsonReader.class);
 
-  private File collectionFile;
+  private Path collectionFile;
 
-  private RandomAccessFile raf;
-  private FileInputStream fis;
-  private FileChannel channel;
+  private FSDataInputStream fis;
   private InputStreamReader isr;
   private BufferedReader reader;
-  private FileLock lock;
-  private File lockFilesLocation;
-  private File fileLockLocation;
+  private Lock  lock;
+  private Path lockFilesLocation;
+  private Path fileLockLocation;
 
-  public JsonReader(JsonDBConfig dbConfig, File collectionFile) throws IOException {
+  public JsonReader(JsonDBConfig dbConfig, Path collectionFile) throws IOException {
     this.collectionFile = collectionFile;
-    this.lockFilesLocation = new File(collectionFile.getParentFile(), "lock");
-    this.fileLockLocation = new File(lockFilesLocation, collectionFile.getName() + ".lock");
+    this.lockFilesLocation = new Path(collectionFile.getParent(), "lock");
+    this.fileLockLocation = new Path(lockFilesLocation, collectionFile.getName() + ".lock");
     
-    if(!lockFilesLocation.exists()) {
-      lockFilesLocation.mkdirs();
+    if(!dbConfig.getDbFileSystem().exists(lockFilesLocation)) {
+      dbConfig.getDbFileSystem().mkdirs(lockFilesLocation);
     }
-    if(!fileLockLocation.exists()) {
-      fileLockLocation.createNewFile();
+    if(!dbConfig.getDbFileSystem().exists(fileLockLocation)) {
+      dbConfig.getDbFileSystem().mkdirs(fileLockLocation);
     }
 
     CharsetDecoder decoder = dbConfig.getCharset().newDecoder();
     decoder.onMalformedInput(CodingErrorAction.REPORT);
     decoder.onUnmappableCharacter(CodingErrorAction.REPORT);
     
-    raf = new RandomAccessFile(fileLockLocation, "rw");
-    channel = raf.getChannel();
-    try {
-      lock = channel.lock();
-    } catch (IOException | OverlappingFileLockException e) {
-      try {
-        channel.close();
-        raf.close();
-      } catch (IOException e1) {
-        logger.error("Failed while closing RandomAccessFile for collection file {}", collectionFile.getName());
-      }
-      throw new JsonFileLockException("JsonReader failed to obtain a file lock for file " + fileLockLocation, e);
-    }
-
-    fis = new FileInputStream(collectionFile);
+    lock = LockFactory.create(LockFactory.lockType.GLOBAL_ONLY, dbConfig.getDbFileSystem()).getLock(fileLockLocation.toString()).readLock();
+    lock.lock();
+    fis = dbConfig.getDbFileSystem().open(collectionFile);
     isr = new InputStreamReader(fis, decoder);
     reader = new BufferedReader(isr);
   }
@@ -116,27 +108,13 @@ public class JsonReader {
     } catch (IOException e) {
       logger.error("Failed to close InputStreamReader for collection file {}", collectionFile.getName(), e);
     }
-    try {
-      if(lock.isValid()) {
-        lock.release();
-      }
-    } catch (IOException e) {
-      logger.error("Failed to release lock for collection file {}", collectionFile.getName(), e);
-    }
-    try {
-      channel.close();
-    } catch (IOException e) {
-      logger.error("Failed to close FileChannel for collection file {}", collectionFile.getName(), e);
+    if(lock != null) {
+      lock.unlock();
     }
     try {
       fis.close();
     } catch (IOException e) {
       logger.error("Failed to close FileInputStream for collection file {}", collectionFile.getName(), e);
     }
-    try {
-      raf.close();
-    } catch (IOException e) {
-      logger.error("Failed to close RandomAccessFile for collection file {}", collectionFile.getName(), e);
-    }    
   }
 }

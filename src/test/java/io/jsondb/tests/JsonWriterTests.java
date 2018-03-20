@@ -31,6 +31,8 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
+import org.apache.hadoop.fs.Path;
+
 import com.google.common.io.Files;
 
 import io.jsondb.CollectionMetaData;
@@ -74,7 +76,7 @@ public class JsonWriterTests {
     
     CollectionMetaData cmd = new CollectionMetaData("instances", new Instance().getClass(), "1.0", null);
     
-    JsonWriter jr = new JsonWriter(dbConfig, cmd, "instances", instancesJson);
+    JsonWriter jr = new JsonWriter(dbConfig, cmd, "instances", new Path(instancesJson.getAbsolutePath()));
     
     assertNotNull(jr);
   }

@@ -21,9 +21,15 @@
 package io.jsondb;
 
 import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.Charset;
-import java.nio.file.Path;
 import java.util.Comparator;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,23 +45,32 @@ public class JsonDBConfig {
   //Settings
   private Charset charset;
   private String dbFilesLocationString;
-  private File dbFilesLocation;
-  private Path dbFilesPath;
+  private Path dbFilesLocation;
+  private Path dbFilesPath;  // used to be nio.Path: TODO eliminate dup
   private String baseScanPackage;
   private ICipher cipher;
   private boolean compatibilityMode;
+  private FileSystem dbFileSystem;
 
   //References
   private ObjectMapper objectMapper;
   private Comparator<String> schemaComparator;
+  private Configuration configuration;
 
   public JsonDBConfig(String dbFilesLocationString, String baseScanPackage,
       ICipher cipher, boolean compatibilityMode, Comparator<String> schemaComparator) {
+    this(dbFilesLocationString, baseScanPackage, cipher, compatibilityMode, schemaComparator,
+        new Configuration());
+  }
+  
+  public JsonDBConfig(String dbFilesLocationString, String baseScanPackage,
+      ICipher cipher, boolean compatibilityMode, Comparator<String> schemaComparator,
+      Configuration conf) {
 
     this.charset = Charset.forName("UTF-8");
     this.dbFilesLocationString = dbFilesLocationString;
-    this.dbFilesLocation = new File(dbFilesLocationString);
-    this.dbFilesPath = dbFilesLocation.toPath();
+    this.dbFilesLocation = new Path(dbFilesLocationString);
+    this.dbFilesPath = dbFilesLocation;
     this.baseScanPackage = baseScanPackage;
     this.cipher = cipher;
 
@@ -71,6 +86,12 @@ public class JsonDBConfig {
     } else {
       this.schemaComparator = schemaComparator;
     }
+    this.configuration = conf;
+    try {
+      dbFileSystem = FileSystem.newInstance(new URI(dbFilesLocationString), conf);
+    } catch (IOException| URISyntaxException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   public Charset getCharset() {
@@ -84,14 +105,19 @@ public class JsonDBConfig {
   }
   public void setDbFilesLocationString(String dbFilesLocationString) {
     this.dbFilesLocationString = dbFilesLocationString;
-    this.dbFilesLocation = new File(dbFilesLocationString);
-    this.dbFilesPath = dbFilesLocation.toPath();
+    this.dbFilesLocation = new Path(dbFilesLocationString);
+    this.dbFilesPath = dbFilesLocation;
   }
-  public File getDbFilesLocation() {
+  public Path getDbFilesLocation() {
     return dbFilesLocation;
   }
   public Path getDbFilesPath() {
     return dbFilesPath;
+  }
+
+  public FileSystem getDbFileSystem()
+  {
+    return dbFileSystem;
   }
 
   public String getBaseScanPackage() {
@@ -125,5 +151,10 @@ public class JsonDBConfig {
   }
   public Comparator<String> getSchemaComparator() {
     return schemaComparator;
+  }
+
+  public Configuration getConfiguration()
+  {
+    return configuration;
   }
 }

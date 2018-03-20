@@ -35,12 +35,19 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import com.datatorrent.gateway.ha.lock.LockFactory;
 
 import io.jsondb.CollectionMetaData;
 import io.jsondb.InvalidJsonDbApiUsageException;
@@ -58,21 +65,21 @@ public class JsonWriter {
 
   private Logger logger = LoggerFactory.getLogger(JsonWriter.class);
 
-  private File dbFilesLocation;
+  private Path dbFilesLocation;
   private String collectionName;
-  private File collectionFile;
+  private Path collectionFile;
   private Charset charset;
   private ObjectMapper objectMapper;
   private SchemaVersion schemaVersion;
   private CollectionMetaData cmd;
 
-  private File lockFilesLocation;
-  private File fileLockLocation;
+  private Path lockFilesLocation;
+  private Path fileLockLocation;
   
-  private RandomAccessFile raf;
-  private FileChannel channel;
+  private ReadWriteLock lock;
+  private FileSystem fileSystem;
 
-  public JsonWriter(JsonDBConfig dbConfig, CollectionMetaData cmd, String collectionName, File collectionFile) throws IOException {
+  public JsonWriter(JsonDBConfig dbConfig, CollectionMetaData cmd, String collectionName, Path collectionFile) throws IOException {
 
     this.dbFilesLocation = dbConfig.getDbFilesLocation();
     this.collectionName = collectionName;
@@ -81,53 +88,30 @@ public class JsonWriter {
     this.objectMapper = dbConfig.getObjectMapper();
     this.schemaVersion = new SchemaVersion(cmd.getSchemaVersion());
     this.cmd = cmd;
+    this.fileSystem = dbConfig.getDbFileSystem();
     
-    this.lockFilesLocation = new File(collectionFile.getParentFile(), "lock");
-    this.fileLockLocation = new File(lockFilesLocation, collectionFile.getName() + ".lock");
+    this.lockFilesLocation = new Path(collectionFile.getParent(), "lock");
+    this.fileLockLocation = new Path(lockFilesLocation, collectionFile.getName() + ".lock");
     
-    if(!lockFilesLocation.exists()) {
-      lockFilesLocation.mkdirs();
+    if(!dbConfig.getDbFileSystem().exists(lockFilesLocation)) {
+      dbConfig.getDbFileSystem().mkdirs(lockFilesLocation);
     }
-    if(!fileLockLocation.exists()) {
-      fileLockLocation.createNewFile();
+    if(!dbConfig.getDbFileSystem().exists(fileLockLocation)) {
+      dbConfig.getDbFileSystem().mkdirs(fileLockLocation);
     }
     
-    raf = new RandomAccessFile(fileLockLocation, "rw");
-    channel = raf.getChannel();
+    lock = LockFactory.create(LockFactory.lockType.GLOBAL_ONLY, dbConfig.getDbFileSystem()).getLock(fileLockLocation.toString());
   }
   
-  private FileLock acquireLock() throws IOException {
-    try {
-      FileLock fileLock= channel.lock();
-      return fileLock;
-    } catch (IOException e) {
-      try {
-        channel.close();
-        raf.close();
-      } catch (IOException e1) {
-        logger.error("Failed while closing RandomAccessFile for collection file {}", collectionFile.getName());
-      }
-      throw e;
-    }
+  private Lock acquireLock() throws IOException {
+    Lock ret = lock.writeLock();
+    ret.lock();
+    return ret;
   }
   
-  private void releaseLock(FileLock lock) {
-    try {
-      if(lock != null && lock.isValid()) {
-        lock.release();
-      }
-    } catch (IOException e) {
-      logger.error("Failed to release lock for collection file {}", collectionFile.getName(), e);
-    }
-    try {
-      channel.close();
-    } catch (IOException e) {
-      logger.error("Failed to close FileChannel for collection file {}", collectionFile.getName(), e);
-    }
-    try {
-      raf.close();
-    } catch (IOException e) {
-      logger.error("Failed to close RandomAccessFile for collection file {}", collectionFile.getName(), e);
+  private void releaseLock(Lock lock) {
+    if (lock != null) {
+      lock.unlock();
     }
   }
 
@@ -145,7 +129,7 @@ public class JsonWriter {
     if (cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -156,7 +140,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -209,7 +193,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }
@@ -234,7 +218,7 @@ public class JsonWriter {
     if (cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -245,7 +229,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -300,7 +284,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }
@@ -325,7 +309,7 @@ public class JsonWriter {
     if (cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -336,7 +320,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -388,7 +372,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }
@@ -413,7 +397,7 @@ public class JsonWriter {
     if (cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -424,7 +408,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -476,7 +460,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }
@@ -502,7 +486,7 @@ public class JsonWriter {
     if (cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -513,7 +497,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -570,7 +554,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }
@@ -595,7 +579,7 @@ public class JsonWriter {
     if (cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -606,7 +590,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -663,7 +647,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }
@@ -688,7 +672,7 @@ public class JsonWriter {
     if (!ignoreReadonly && cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -699,7 +683,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -749,7 +733,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }
@@ -775,7 +759,7 @@ public class JsonWriter {
     if (!ignoreReadonly && cmd.isReadOnly()) {
       throw new InvalidJsonDbApiUsageException("Failed to modify collection, Collection is loaded as readonly");
     }
-    FileLock lock = null;
+    Lock lock = null;
     try {
       try {
         lock = acquireLock();
@@ -786,7 +770,7 @@ public class JsonWriter {
       
       File tFile;
       try {
-        tFile = File.createTempFile(collectionName, null, dbFilesLocation);
+        tFile = File.createTempFile(collectionName, null, null);
       } catch (IOException e) {
         logger.error("Failed to create temporary file for append", e);
         return false;
@@ -843,7 +827,7 @@ public class JsonWriter {
       }
 
       try {
-        Files.move(tFile.toPath(), collectionFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        fileSystem.moveFromLocalFile(new Path(tFile.getAbsolutePath()), collectionFile); // TODO indicate StandardCopyOption.ATOMIC_MOVE
       } catch (IOException e) {
         logger.error("Failed to move temporary collection file {} to collection file {}", tFileName, collectionFile.getName(), e);
       }

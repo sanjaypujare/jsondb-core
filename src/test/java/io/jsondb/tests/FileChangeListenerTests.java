@@ -32,6 +32,8 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Scanner;
 
@@ -40,6 +42,10 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 
 import com.google.common.io.Files;
 
@@ -58,35 +64,61 @@ import io.jsondb.tests.util.TestUtils;
 public class FileChangeListenerTests {
 
   private static final long DB_RELOAD_TIMEOUT = 5 * 1000;
-  private String dbFilesLocation = "src/test/resources/dbfiles/eventsTests";
-  private File dbFilesFolder = new File(dbFilesLocation);
-  private File instancesJson = new File(dbFilesFolder, "instances.json");
-  private File pojoWithEnumFieldsJson = new File(dbFilesFolder, "pojowithenumfields.json");
+
+  private final static String HDFS_ROOT = "hdfs://localhost:9000/tmp";
+  private String dbFilesLocation = HDFS_ROOT + "/jsondb/dbfiles/eventsTests";
+  private Path dbFilesFolder = new Path(dbFilesLocation);
+  private Path instancesJson = new Path(dbFilesFolder, "instances.json");
+  private Path pojoWithEnumFieldsJson = new Path(dbFilesFolder, "pojowithenumfields.json");
 
   private JsonDBTemplate jsonDBTemplate = null;
+  FileSystem fileSystem = null;
 
   @Rule
   public ExpectedException expectedException = ExpectedException.none();
 
   @Before
   public void setUp() throws Exception {
-    //Filewatcher does not work on Mac and hence JsonDB events will never fire
-    //and so the EventTests will never succeed. So we run the tests only if
-    //it is not a Mac system
-    assumeTrue(!TestUtils.isMac());
+    //Current Filewatcher uses DFSInotifyEventInputStream which only works on HDFS - not on local system!
+    //assumeTrue(isHDFSAvailable());
+    assumeTrue(false);  // enable when we get DFSInotifyEventInputStream to work
 
-    dbFilesFolder.mkdir();
-    Files.copy(new File("src/test/resources/dbfiles/pojowithenumfields.json"), pojoWithEnumFieldsJson);
+    fileSystem.mkdirs(dbFilesFolder);
+    fileSystem.copyFromLocalFile(new Path("src/test/resources/dbfiles/pojowithenumfields.json"), pojoWithEnumFieldsJson);
+
     ICipher cipher = new DefaultAESCBCCipher("1r8+24pibarAWgS85/Heeg==");
 
-    jsonDBTemplate = new JsonDBTemplate(dbFilesLocation, "io.jsondb.tests.model", cipher);
+    Configuration conf = new Configuration();
+    conf.set("hadoop.proxyuser.root.groups", "*");
+    conf.set("hadoop.proxyuser.root.hosts", "*");
+    jsonDBTemplate = new JsonDBTemplate(dbFilesLocation, "io.jsondb.tests.model", cipher, false, null, conf);
   }
 
   @After
   public void tearDown() throws Exception {
-    Util.delete(dbFilesFolder);
+    if (fileSystem != null) {
+      fileSystem.delete(dbFilesFolder, true);
+    }
   }
 
+  private boolean isHDFSAvailable()
+  {
+    Configuration conf = new Configuration();
+    String defaultFs = conf.get(FileSystem.DEFAULT_FS);
+
+    try {
+      if (defaultFs == null || defaultFs.isEmpty()) {
+        fileSystem = FileSystem.newInstance(new URI(HDFS_ROOT), conf);
+      } else {
+        fileSystem = FileSystem.newInstance(conf);
+      }
+      return fileSystem != null;
+    } catch (IOException | URISyntaxException e) {
+      e.printStackTrace();
+      return false;
+    }
+  }
+  
   @Test
   public void testAutoReloadOnCollectionFileAdded() {
     jsonDBTemplate.addCollectionFileChangeListener(new CollectionFileChangeListener() {
@@ -122,13 +154,13 @@ public class FileChangeListenerTests {
     
     assertFalse(jsonDBTemplate.collectionExists(Instance.class));
     try {
-      Files.copy(new File("src/test/resources/dbfiles/instances.json"), instancesJson);
+      fileSystem.copyFromLocalFile(new Path("src/test/resources/dbfiles/instances.json"), instancesJson);
     } catch (IOException e1) {
       fail("Failed to copy data store files");
     }
     try {
       // Give it some time to reload DB
-      Thread.sleep(DB_RELOAD_TIMEOUT);
+      Thread.sleep(DB_RELOAD_TIMEOUT + 180000);
     } catch (InterruptedException e) {
       fail("Failed to wait for db reload");
     }
@@ -140,7 +172,7 @@ public class FileChangeListenerTests {
   @Test
   public void testAutoReloadOnCollectionFileModified() throws FileNotFoundException {
     try {
-      Files.copy(new File("src/test/resources/dbfiles/instances.json"), instancesJson);
+      fileSystem.copyFromLocalFile(new Path("src/test/resources/dbfiles/instances.json"), instancesJson);
     } catch (IOException e1) {
       fail("Failed to copy data store files");
     }
@@ -171,9 +203,15 @@ public class FileChangeListenerTests {
         + "\"privateKey\":\"Zf9vl5K6WV6BA3eL7JbnrfPMjfJxc9Rkoo0zlROQlgTslmcp9iFzos+MP93GZqop\","
         + "\"publicKey\":\"d3aa045f71bf4d1dffd2c5f485a4bc1d\"}";
 
-    PrintWriter out = new PrintWriter(instancesJson);
-    out.println(content);
-    out.close();
+    ;
+
+    try {
+      PrintWriter out = new PrintWriter(fileSystem.create(instancesJson));
+      out.println(content);
+      out.close();
+    } catch (IOException e1) {
+      fail("Failed to create " + instancesJson);
+    }
 
     try {
       // Give it some time to reload DB
@@ -205,7 +243,11 @@ public class FileChangeListenerTests {
       }
     });
 
-    pojoWithEnumFieldsJson.delete();
+    try {
+      fileSystem.delete(pojoWithEnumFieldsJson, false);
+    } catch (IOException e1) {
+      fail("Failed to delete " + pojoWithEnumFieldsJson);
+    }
 
     try {
       // Give it some time to reload DB

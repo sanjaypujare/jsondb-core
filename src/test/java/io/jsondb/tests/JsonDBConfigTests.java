@@ -30,6 +30,8 @@ import java.nio.charset.Charset;
 
 import org.junit.Test;
 
+import org.apache.hadoop.fs.Path;
+
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -50,16 +52,16 @@ public class JsonDBConfigTests {
         new DefaultSchemaVersionComparator());
 
     assertEquals("src/test/resources/dbfiles/dbConfigTests", dbConfig.getDbFilesLocationString());
-    assertEquals(new File("src/test/resources/dbfiles/dbConfigTests"), dbConfig.getDbFilesLocation());
-    assertEquals(new File("src/test/resources/dbfiles/dbConfigTests").toPath(), dbConfig.getDbFilesPath());
+    assertEquals(new Path("src/test/resources/dbfiles/dbConfigTests"), dbConfig.getDbFilesLocation());
+    assertEquals(new Path("src/test/resources/dbfiles/dbConfigTests"), dbConfig.getDbFilesPath());
     assertEquals(Charset.forName("UTF-8"), dbConfig.getCharset());
     assertNull(dbConfig.getCipher());
     assertFalse(dbConfig.isCompatibilityMode());
     
     dbConfig.setDbFilesLocationString("myfolder");
     assertEquals("myfolder", dbConfig.getDbFilesLocationString());
-    assertEquals(new File("myfolder"), dbConfig.getDbFilesLocation());
-    assertEquals(new File("myfolder").toPath(), dbConfig.getDbFilesPath());
+    assertEquals(new Path("myfolder"), dbConfig.getDbFilesLocation());
+    assertEquals(new Path("myfolder"), dbConfig.getDbFilesPath());
     
     Charset newCharset = Charset.forName("UTF-16");
     dbConfig.setCharset(newCharset);

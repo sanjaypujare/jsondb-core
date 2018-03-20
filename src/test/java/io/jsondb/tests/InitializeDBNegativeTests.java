@@ -107,7 +107,7 @@ public class InitializeDBNegativeTests {
     }
 
     expectedException.expect(InvalidJsonDbApiUsageException.class);
-    expectedException.expectMessage("Specified DbFiles directory is actually a file cannot use it as a directory");
+    expectedException.expectMessage("IOException ");
 
     new JsonDBTemplate(someDbFilesFolder.toString(), "org.jsondb.tests.model");
   }
