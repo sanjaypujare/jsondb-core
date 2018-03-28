@@ -179,5 +179,35 @@ public class FindComplexQueryTests {
     assertEquals(0, complexSites.size());
   }
 
+  /**
+   * test to find a non-existent document
+   */
+  @Test
+  public void testFind_WithMap() {
+    ComplexSite cSite = new ComplexSite();
+    cSite.setId("200");
+    cSite.setLocation("location200");
+    ComplexSite.Address home = new ComplexSite.Address();
+    home.setNumber(200);
+    home.setStreet("Second St");
+    home.setCity("HCity");
+    cSite.getAllAddresses().put("home", home);
+    ComplexSite.Address work = new ComplexSite.Address();
+    work.setNumber(201);
+    work.setStreet("Third St");
+    work.setCity("Work City");
+    cSite.getAllAddresses().put("work", work);
+    jsonDBTemplate.insert(cSite);
+    String jxQuery = String.format("/./allAddresses[@name='home'][city='HCity']");
+    List<ComplexSite.Address> complexSitesAddrs = jsonDBTemplate.find(jxQuery, "complexsite");
+    assertEquals(1, complexSitesAddrs.size());
+    jxQuery = String.format("/./allAddresses[@name='home'][city='Work City']");
+    complexSitesAddrs = jsonDBTemplate.find(jxQuery, "complexsite");
+    assertEquals(0, complexSitesAddrs.size());
+    jxQuery = String.format("/./allAddresses[@name='work'][city='Work City']");
+    complexSitesAddrs = jsonDBTemplate.find(jxQuery, "complexsite");
+    assertEquals(1, complexSitesAddrs.size());
+  }
+
 }
 

@@ -1,4 +1,4 @@
-{"schemaVersion":"0.5"}
+{"schemaVersion":"1.0"}
 {"id":"001","location":"eclb-54-01","address":{"number":23,"street":"Junction Ave","city":"San Jose"}}
 {"id":"002","location":"eclb-54-02","address":{"number":24,"street":"Fruitvale Ave","city":"Santa Clara"}}
 {"id":"003","location":"eclb-54-03","address":{"number":33,"street":"Plumeria Rd","city":"San Francisco"}}

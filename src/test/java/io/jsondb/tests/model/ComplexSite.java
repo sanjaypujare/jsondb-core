@@ -20,6 +20,9 @@
  */
 package io.jsondb.tests.model;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import io.jsondb.annotation.Document;
 import io.jsondb.annotation.Id;
 
@@ -66,6 +69,7 @@ public class ComplexSite {
   private String id;
   private String location;
   private Address address;
+  private Map<String, Address> allAddresses = new HashMap<String, Address>();
   public String getId() {
     return id;
   }
@@ -85,5 +89,13 @@ public class ComplexSite {
   public void setAddress(Address address)
   {
     this.address = address;
+  }
+  public Map<String, Address> getAllAddresses()
+  {
+    return allAddresses;
+  }
+  public void setAllAddresses(Map<String, Address> allAddresses)
+  {
+    this.allAddresses = allAddresses;
   }
 }
