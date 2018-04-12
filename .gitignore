@@ -19,3 +19,4 @@
 #Ignore .gitignore from subdirectories
 */.gitignore
 /bin/
+/target/

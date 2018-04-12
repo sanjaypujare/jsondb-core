@@ -20,15 +20,16 @@
  */
 package io.jsondb;
 
-import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.Charset;
-import java.nio.file.Path;
 import java.util.Comparator;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 
-import io.jsondb.crypto.ICipher;
 
 /**
  * A POJO that has settings for the functioning of DB.
@@ -39,37 +40,38 @@ public class JsonDBConfig {
   //Settings
   private Charset charset;
   private String dbFilesLocationString;
-  private File dbFilesLocation;
-  private Path dbFilesPath;
-  private String baseScanPackage;
-  private ICipher cipher;
-  private boolean compatibilityMode;
+  private Path dbFilesLocation;
+  private Path dbFilesPath;  // used to be nio.Path: TODO eliminate dup
+  private FileSystem dbFileSystem;
+  private String schemaVersion = "1.0";
 
   //References
-  private ObjectMapper objectMapper;
   private Comparator<String> schemaComparator;
+  private Configuration configuration;
 
-  public JsonDBConfig(String dbFilesLocationString, String baseScanPackage,
-      ICipher cipher, boolean compatibilityMode, Comparator<String> schemaComparator) {
+  public JsonDBConfig(String dbFilesLocationString,
+      Comparator<String> schemaComparator) {
+    this(dbFilesLocationString, schemaComparator, new Configuration());
+  }
+  
+  public JsonDBConfig(String dbFilesLocationString,
+      Comparator<String> schemaComparator, Configuration conf) {
 
     this.charset = Charset.forName("UTF-8");
     this.dbFilesLocationString = dbFilesLocationString;
-    this.dbFilesLocation = new File(dbFilesLocationString);
-    this.dbFilesPath = dbFilesLocation.toPath();
-    this.baseScanPackage = baseScanPackage;
-    this.cipher = cipher;
-
-    this.compatibilityMode = compatibilityMode;
-    this.objectMapper = new ObjectMapper();
-
-    if (compatibilityMode) {
-      objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-    }
+    this.dbFilesLocation = new Path(dbFilesLocationString);
+    this.dbFilesPath = dbFilesLocation;
 
     if (null == schemaComparator) {
       this.schemaComparator = new DefaultSchemaVersionComparator();
     } else {
       this.schemaComparator = schemaComparator;
+    }
+    this.configuration = conf;
+    try {
+      dbFileSystem = FileSystem.newInstance(new URI(dbFilesLocationString), conf);
+    } catch (IOException| URISyntaxException e) {
+      throw new RuntimeException(e);
     }
   }
 
@@ -84,46 +86,43 @@ public class JsonDBConfig {
   }
   public void setDbFilesLocationString(String dbFilesLocationString) {
     this.dbFilesLocationString = dbFilesLocationString;
-    this.dbFilesLocation = new File(dbFilesLocationString);
-    this.dbFilesPath = dbFilesLocation.toPath();
+    this.dbFilesLocation = new Path(dbFilesLocationString);
+    this.dbFilesPath = dbFilesLocation;
   }
-  public File getDbFilesLocation() {
+  public Path getDbFilesLocation() {
     return dbFilesLocation;
   }
   public Path getDbFilesPath() {
     return dbFilesPath;
   }
 
-  public String getBaseScanPackage() {
-    return baseScanPackage;
+  public FileSystem getDbFileSystem()
+  {
+    return dbFileSystem;
   }
-  public void setBaseScanPackage(String baseScanPackage) {
-    this.baseScanPackage = baseScanPackage;
-  }
-  public ICipher getCipher() {
-    return cipher;
-  }
-  public void setCipher(ICipher cipher) {
-    this.cipher = cipher;
-  }
-  public boolean isCompatibilityMode() {
-    return compatibilityMode;
-  }
-  public void setCompatibilityMode(boolean compatibilityMode) {
-    this.compatibilityMode = compatibilityMode;
-    if (compatibilityMode) {
-      objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-    } else {
-      objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true);
-    }
-  }
-  public ObjectMapper getObjectMapper() {
-    return objectMapper;
-  }
-  public void setObjectMapper(ObjectMapper objectMapper) {
-    this.objectMapper = objectMapper;
-  }
+
   public Comparator<String> getSchemaComparator() {
     return schemaComparator;
+  }
+
+  public Configuration getConfiguration()
+  {
+    return configuration;
+  }
+
+  /**
+   * @return the schemaVersion
+   */
+  public String getSchemaVersion()
+  {
+    return schemaVersion;
+  }
+
+  /**
+   * @param schemaVersion the schemaVersion to set
+   */
+  public void setSchemaVersion(String schemaVersion)
+  {
+    this.schemaVersion = schemaVersion;
   }
 }

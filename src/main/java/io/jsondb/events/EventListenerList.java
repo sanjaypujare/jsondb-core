@@ -20,13 +20,8 @@
  */
 package io.jsondb.events;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Path;
-import java.nio.file.StandardWatchEventKinds;
-import java.nio.file.WatchEvent;
-import java.nio.file.WatchKey;
-import java.nio.file.WatchService;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +30,18 @@ import java.util.concurrent.Executors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSInotifyEventInputStream;
+import org.apache.hadoop.hdfs.client.HdfsAdmin;
+import org.apache.hadoop.hdfs.inotify.Event;
+import org.apache.hadoop.hdfs.inotify.Event.AppendEvent;
+import org.apache.hadoop.hdfs.inotify.Event.CloseEvent;
+import org.apache.hadoop.hdfs.inotify.Event.CreateEvent;
+import org.apache.hadoop.hdfs.inotify.Event.CreateEvent.INodeType;
+import org.apache.hadoop.hdfs.inotify.Event.RenameEvent;
+import org.apache.hadoop.hdfs.inotify.Event.UnlinkEvent;
+import org.apache.hadoop.hdfs.inotify.MissingEventsException;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
@@ -54,8 +61,9 @@ public class EventListenerList {
 
   private List<CollectionFileChangeListener> listeners;
   private ExecutorService collectionFilesWatcherExecutor;
-  private WatchService watcher = null;
+  //private WatchService watcher = null;
   private boolean stopWatcher;
+  private DFSInotifyEventInputStream dfsNotifyStream;
 
   public EventListenerList(JsonDBConfig dbConfig, Map<String, CollectionMetaData> cmdMap) {
     this.dbConfig = dbConfig;
@@ -72,15 +80,25 @@ public class EventListenerList {
           new ThreadFactoryBuilder().setNameFormat("jsondb-files-watcher-thread-%d").build());
 
       try {
-        watcher = dbConfig.getDbFilesPath().getFileSystem().newWatchService();
-        dbConfig.getDbFilesPath().register(watcher, StandardWatchEventKinds.ENTRY_CREATE,
-                                                    StandardWatchEventKinds.ENTRY_DELETE,
-                                                    StandardWatchEventKinds.ENTRY_MODIFY);
+        /*
+        UserGroupInformation ugi = UserGroupInformation.createProxyUser("hdfs", UserGroupInformation.getLoginUser());
+        ugi.doAs(new PrivilegedExceptionAction<Void>() {
+
+          @Override
+          public Void run() throws Exception
+          {
+            HdfsAdmin admin = new HdfsAdmin(URI.create(dbConfig.getDbFilesLocationString()), dbConfig.getConfiguration());
+            dfsNotifyStream = admin.getInotifyEventStream();
+            return null;
+          }
+        }); */
+        HdfsAdmin admin = new HdfsAdmin(URI.create(dbConfig.getDbFilesLocationString()), dbConfig.getConfiguration());
+        dfsNotifyStream = admin.getInotifyEventStream();
       } catch (IOException e) {
         logger.error("Failed to create the WatchService for the dbFiles location", e);
         throw new JsonDBException("Failed to create the WatchService for the dbFiles location", e);
       }
-
+      stopWatcher = false;
       collectionFilesWatcherExecutor.execute(new CollectionFilesWatcherRunnable());
     } else {
       listeners.add(listener);
@@ -91,15 +109,7 @@ public class EventListenerList {
     if (null != listeners) {
       listeners.remove(listener);
     }
-    if (listeners.size() < 1) {
-      stopWatcher = true;
-      collectionFilesWatcherExecutor.shutdownNow();
-      try {
-        watcher.close();
-      } catch (IOException e) {
-        logger.error("Failed to close the WatchService for the dbFiles location", e);
-      }
-    }
+    // removed code that was incorrectly stopping the watcher thread
   }
 
   public boolean hasCollectionFileChangeListener() {
@@ -113,57 +123,107 @@ public class EventListenerList {
     if (null != listeners && listeners.size() > 0) {
       stopWatcher = true;
       collectionFilesWatcherExecutor.shutdownNow();
-      try {
-        watcher.close();
-      } catch (IOException e) {
-        logger.error("Failed to close the WatchService for the dbFiles location", e);
-      }
       listeners.clear();
     }
   }
 
   private class CollectionFilesWatcherRunnable implements Runnable {
-    @Override
-    public void run() {
-      while (!stopWatcher) {
-        WatchKey watckKey = null;
-        try {
-          watckKey = watcher.take();
-        } catch (InterruptedException e) {
-          logger.debug("The watcher service thread was interrupted", e);
-          return;
+    
+    private String getMonitoredFile(String path)
+    {
+      if (path.startsWith(dbConfig.getDbFilesLocationString())) {
+        String collectionName = getFileName(path);
+        if (collectionName.endsWith(".json") && (cmdMap.containsKey(collectionName))) {
+          return collectionName;
         }
-        List<WatchEvent<?>> events = watckKey.pollEvents();
-        for (WatchEvent<?> event : events) {
-          WatchEvent.Kind<?> kind = event.kind();
-          if (kind == StandardWatchEventKinds.OVERFLOW) {
-            continue;
-          }
-          @SuppressWarnings("unchecked")
-          WatchEvent<Path> ev = (WatchEvent<Path>)event;
-          File file = ev.context().toFile();
-          String fileName = file.getName();
-          int extnLocation = fileName.lastIndexOf('.');
-          if(extnLocation != -1) {
-            String collectionName = fileName.substring(0, extnLocation);
-            if (fileName.endsWith(".json") && (cmdMap.containsKey(collectionName))) {
-              if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
-                for (CollectionFileChangeListener listener : listeners) {
-                  listener.collectionFileAdded(collectionName);
-                }
-              } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
-                for (CollectionFileChangeListener listener : listeners) {
-                  listener.collectionFileDeleted(collectionName);
-                }
-              } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
-                for (CollectionFileChangeListener listener : listeners) {
-                  listener.collectionFileModified(collectionName);
-                }
-              }
-            }
-          }
+      }
+      return null; 
+    }
+    
+    private void sendFileAddedEvent(String createdPath)
+    {
+      String collectionName = getMonitoredFile(createdPath);
+      if (collectionName != null) {
+        for (CollectionFileChangeListener listener : listeners) {
+          listener.collectionFileAdded(collectionName);
         }
       }
     }
+    
+    private void sendFileDeletedEvent(String deletedPath)
+    {
+      String collectionName = getMonitoredFile(deletedPath);
+      if (collectionName != null) {
+        for (CollectionFileChangeListener listener : listeners) {
+          listener.collectionFileDeleted(collectionName);
+        }
+      }      
+    }
+    
+    private void sendFileModifiedEvent(String modifiedPath)
+    {
+      String collectionName = getMonitoredFile(modifiedPath);
+      if (collectionName != null) {
+        for (CollectionFileChangeListener listener : listeners) {
+          listener.collectionFileModified(collectionName);
+        }
+      }
+    }
+    
+    @Override
+    public void run()
+    {
+      while (!stopWatcher) {
+        Event event = null;
+        try {
+           event = dfsNotifyStream.take();
+        } catch (IOException | InterruptedException | MissingEventsException e) {
+          logger.debug("The watcher service thread was interrupted", e);
+          return;
+        }
+        if (event == null) {
+          continue;
+        }
+        switch (event.getEventType()) {
+          case CREATE:
+            CreateEvent createEvent = (CreateEvent)event;
+            String createdPath = createEvent.getPath();
+            if (createEvent.getiNodeType() == INodeType.FILE) {
+              sendFileAddedEvent(createdPath);
+            }
+            break;
+          case APPEND:
+            AppendEvent appendEvent = (AppendEvent)event;
+            sendFileModifiedEvent(appendEvent.getPath());
+            break;
+          case UNLINK:
+            UnlinkEvent unlinkEvent = (UnlinkEvent)event;
+            sendFileDeletedEvent(unlinkEvent.getPath());
+            break;
+          case RENAME: // treat dst as added and src as deleted
+            RenameEvent renameEvent = (RenameEvent)event;
+            sendFileAddedEvent(renameEvent.getDstPath());
+            sendFileDeletedEvent(renameEvent.getSrcPath());
+            break;
+          case CLOSE:  // Sent when a file is closed after append or create
+            CloseEvent closeEvent = (CloseEvent)event;
+            if (closeEvent.getFileSize() == -1) {
+              // check the doc org.apache.hadoop.hdfs.inotify.Event.CloseEvent.getFileSize()
+              sendFileModifiedEvent(closeEvent.getPath());
+            } else {
+              sendFileAddedEvent(closeEvent.getPath());
+            }
+            break;
+          case METADATA:
+
+        }
+      }
+    }
+    
+    private String getFileName(String path)
+    {
+      return new Path(path).getName();
+    }
+    
   }
 }
